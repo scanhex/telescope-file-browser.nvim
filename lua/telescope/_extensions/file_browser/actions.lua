@@ -110,8 +110,48 @@ local function newly_created_root(path, cwd)
   return idx == 1 and path:absolute() or parents[idx - 1]
 end
 
-local function restore_win_callback(callback, restore_win)
+local function suspend_picker_close(prompt_bufnr)
+  if type(prompt_bufnr) ~= "number" or not a.nvim_buf_is_valid(prompt_bufnr) then
+    return function() end
+  end
+
+  local group = a.nvim_create_augroup("PickerInsert", { clear = false })
+  local close_autocmds = a.nvim_get_autocmds({
+    group = group,
+    event = "BufLeave",
+    buffer = prompt_bufnr,
+  })
+  if vim.tbl_isempty(close_autocmds) then
+    return function() end
+  end
+
+  a.nvim_clear_autocmds({
+    group = group,
+    event = "BufLeave",
+    buffer = prompt_bufnr,
+  })
+
+  local restored = false
+  return function()
+    if restored or not a.nvim_buf_is_valid(prompt_bufnr) then
+      return
+    end
+    restored = true
+    a.nvim_create_autocmd("BufLeave", {
+      buffer = prompt_bufnr,
+      group = group,
+      nested = true,
+      once = true,
+      callback = function()
+        require("telescope.pickers").on_close_prompt(prompt_bufnr)
+      end,
+    })
+  end
+end
+
+local function restore_win_callback(callback, restore_win, restore_picker_close)
   return function(...)
+    restore_picker_close()
     if type(restore_win) == "number" and a.nvim_win_is_valid(restore_win) then
       pcall(a.nvim_set_current_win, restore_win)
     end
@@ -121,9 +161,15 @@ end
 
 local function get_input(opts, callback)
   local fb_config = require "telescope._extensions.file_browser.config"
+  local prompt_bufnr = opts.prompt_bufnr
+  opts.prompt_bufnr = nil
   local restore_win = opts.restore_win or a.nvim_get_current_win()
   opts.restore_win = nil
-  local wrapped = restore_win_callback(callback, restore_win)
+  local restore_picker_close = function() end
+  if fb_config.values.use_ui_input then
+    restore_picker_close = suspend_picker_close(prompt_bufnr)
+  end
+  local wrapped = restore_win_callback(callback, restore_win, restore_picker_close)
   if fb_config.values.use_ui_input then
     vim.ui.input(opts, wrapped)
   else
@@ -135,9 +181,15 @@ end
 
 local function get_confirmation(opts, callback)
   local fb_config = require "telescope._extensions.file_browser.config"
+  local prompt_bufnr = opts.prompt_bufnr
+  opts.prompt_bufnr = nil
   local restore_win = opts.restore_win or a.nvim_get_current_win()
   opts.restore_win = nil
-  local wrapped = restore_win_callback(callback, restore_win)
+  local restore_picker_close = function() end
+  if fb_config.values.use_ui_input then
+    restore_picker_close = suspend_picker_close(prompt_bufnr)
+  end
+  local wrapped = restore_win_callback(callback, restore_win, restore_picker_close)
   if fb_config.values.use_ui_input then
     opts.prompt = opts.prompt .. " [y/N]"
     vim.ui.input(opts, function(input)
@@ -162,7 +214,7 @@ fb_actions.create = function(prompt_bufnr)
   local finder = current_picker.finder
 
   local base_dir = get_target_dir(finder) .. os_sep
-  get_input({ prompt = "Create: ", default = base_dir, completion = "file" }, function(input)
+  get_input({ prompt = "Create: ", default = base_dir, completion = "file", prompt_bufnr = prompt_bufnr }, function(input)
     vim.cmd [[ redraw ]] -- redraw to clear out vim.ui.prompt to avoid hit-enter prompt
     local file = create(input, finder)
     if file then
@@ -319,6 +371,7 @@ fb_actions.rename = function(prompt_bufnr)
       prompt = "Rename: ",
       default = old_path:absolute(),
       completion = "file",
+      prompt_bufnr = prompt_bufnr,
     }, function(file)
       vim.cmd [[ redraw ]] -- redraw to clear out vim.ui.prompt to avoid hit-enter prompt
       if file == "" or file == nil then
@@ -486,6 +539,7 @@ fb_actions.copy = function(prompt_bufnr)
         ),
         default = destination:absolute(),
         completion = "file",
+        prompt_bufnr = prompt_bufnr,
       }, function(input)
         vim.cmd [[ redraw ]] -- redraw to clear out vim.ui.prompt to avoid hit-enter prompt
         if input ~= nil then
@@ -554,6 +608,7 @@ fb_actions.remove = function(prompt_bufnr)
   -- TODO fix default vim.ui.input and nvim-notify 'selections to be deleted' message
   get_confirmation({
     prompt = "Remove selection? (" .. #files .. " items)",
+    prompt_bufnr = prompt_bufnr,
   }, function(confirmed)
     vim.cmd [[ redraw ]] -- redraw to clear out vim.ui.prompt to avoid hit-enter prompt
     if confirmed then
