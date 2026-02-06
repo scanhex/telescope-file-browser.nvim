@@ -110,28 +110,43 @@ local function newly_created_root(path, cwd)
   return idx == 1 and path:absolute() or parents[idx - 1]
 end
 
+local function restore_win_callback(callback, restore_win)
+  return function(...)
+    if type(restore_win) == "number" and a.nvim_win_is_valid(restore_win) then
+      pcall(a.nvim_set_current_win, restore_win)
+    end
+    callback(...)
+  end
+end
+
 local function get_input(opts, callback)
   local fb_config = require "telescope._extensions.file_browser.config"
+  local restore_win = opts.restore_win or a.nvim_get_current_win()
+  opts.restore_win = nil
+  local wrapped = restore_win_callback(callback, restore_win)
   if fb_config.values.use_ui_input then
-    vim.ui.input(opts, callback)
+    vim.ui.input(opts, wrapped)
   else
     async.run(function()
       return vim.fn.input(opts)
-    end, callback)
+    end, wrapped)
   end
 end
 
 local function get_confirmation(opts, callback)
   local fb_config = require "telescope._extensions.file_browser.config"
+  local restore_win = opts.restore_win or a.nvim_get_current_win()
+  opts.restore_win = nil
+  local wrapped = restore_win_callback(callback, restore_win)
   if fb_config.values.use_ui_input then
     opts.prompt = opts.prompt .. " [y/N]"
     vim.ui.input(opts, function(input)
-      callback(input and input:lower() == "y")
+      wrapped(input and input:lower() == "y")
     end)
   else
     async.run(function()
       return vim.fn.confirm(opts.prompt, table.concat({ "&Yes", "&No" }, "\n"), 2) == 1
-    end, callback)
+    end, wrapped)
   end
 end
 
@@ -300,7 +315,11 @@ fb_actions.rename = function(prompt_bufnr)
       fb_utils.notify("action.rename", { msg = "Please select a valid file or folder!", level = "WARN", quiet = quiet })
       return
     end
-    get_input({ prompt = "Rename: ", default = old_path:absolute(), completion = "file" }, function(file)
+    get_input({
+      prompt = "Rename: ",
+      default = old_path:absolute(),
+      completion = "file",
+    }, function(file)
       vim.cmd [[ redraw ]] -- redraw to clear out vim.ui.prompt to avoid hit-enter prompt
       if file == "" or file == nil then
         fb_utils.notify("action.rename", { msg = "Renaming aborted!", level = "WARN", quiet = quiet })
@@ -533,7 +552,9 @@ fb_actions.remove = function(prompt_bufnr)
   local message = "Selections to be deleted: " .. table.concat(files, ", ")
   fb_utils.notify("actions.remove", { msg = message, level = "INFO", quiet = quiet })
   -- TODO fix default vim.ui.input and nvim-notify 'selections to be deleted' message
-  get_confirmation({ prompt = "Remove selection? (" .. #files .. " items)" }, function(confirmed)
+  get_confirmation({
+    prompt = "Remove selection? (" .. #files .. " items)",
+  }, function(confirmed)
     vim.cmd [[ redraw ]] -- redraw to clear out vim.ui.prompt to avoid hit-enter prompt
     if confirmed then
       fb_lsp.will_delete_files(files)

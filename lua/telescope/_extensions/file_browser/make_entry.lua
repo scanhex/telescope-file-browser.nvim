@@ -78,6 +78,28 @@ local function compute_file_width(status, opts)
   return total_file_width
 end
 
+local function get_transform_opts(opts, total_file_width)
+  local path_display = vim.F.if_nil(opts.path_display, require "telescope.config".values.path_display)
+  if type(path_display) ~= "table" then
+    return opts
+  end
+
+  if not vim.tbl_contains(path_display, "truncate") and path_display.truncate == nil then
+    return opts
+  end
+
+  -- telescope.utils.path_truncate falls back to current buffer status to infer width.
+  -- During vim.ui.input callbacks this buffer may not be the Telescope prompt.
+  -- Provide a stable width from file-browser layout instead.
+  local display_width = vim.F.if_nil(opts.file_width, math.max(15, total_file_width))
+  return setmetatable({
+    __length = display_width,
+    __prefix = vim.F.if_nil(opts.__prefix, 0),
+  }, {
+    __index = opts,
+  })
+end
+
 -- General:
 -- telescope-file-browser unlike telescope
 -- caches "made" entries to retain multi-selections
@@ -94,6 +116,7 @@ local make_entry = function(opts)
   local status = state.get_status(prompt_bufnr)
 
   local total_file_width = compute_file_width(status, opts)
+  local transform_opts = get_transform_opts(opts, total_file_width)
 
   local autocmd_id
   autocmd_id = vim.api.nvim_create_autocmd("VimResized", {
@@ -104,6 +127,7 @@ local make_entry = function(opts)
         return
       end
       total_file_width = compute_file_width(status, opts)
+      transform_opts = get_transform_opts(opts, total_file_width)
       if type(prompt_bufnr) == "number" and vim.api.nvim_buf_is_valid(prompt_bufnr) then
         local current_picker = action_state.get_current_picker(prompt_bufnr)
         local selection = action_state.get_selected_entry()
@@ -126,7 +150,7 @@ local make_entry = function(opts)
     local icon, icon_hl
 
     local tail = fb_utils.sanitize_path_str(entry.ordinal)
-    local path_display = utils.transform_path(opts, tail)
+    local path_display = utils.transform_path(transform_opts, tail)
 
     if entry.is_dir then
       if entry.path == parent_dir then
